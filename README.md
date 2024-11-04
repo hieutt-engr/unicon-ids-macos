@@ -78,6 +78,41 @@ python main_linear.py --batch_size 512
   --ckpt /path/to/model.pth
 ```
 
+**(5) Preprocessing CAN dataset**
+```
+python3 preprocessing.py --window_size=32 --strided=32 --indir=./data/Car-Hacking --outdir=./data/Car-Hacking> data_preprocessing_can.txt
+```
+
+**(6) Preprocessing ROAD Fabrication dataset**
+
+```
+CUDA_VISIBLE_DEVICES=2 python3 preprocessing_road.py --window_size=32 --strided=8 --attack_type=road_fab --indir=./data/road/fab_dataset --outdir=./data/road/preprocessed/fab_multi/TFRecord > data_preprocessing_roadfab_new.txt
+```
+
+**(7) Preprocessing ROAD Masquerade dataset**
+
+```
+CUDA_VISIBLE_DEVICES=0 python3 preprocessing_road.py --window_size=32 --strided=8 --attack_type=road_mas --indir=./data/road/mas_dataset --outdir=./data/road/preprocessed/mas_multi/TFRecord > data_preprocessing_roadfab.txt
+```
+
+
+**(8) Preprocessing CAN_ML dataset**
+```
+python3 preprocessing_can_ml.py --window_size=32 --strided=16 > data_preprocessing_can_ml.txt
+```
+
+**(9) Train/Val Split**
+
+```
+python3 train_test_split_all.py --data_path ./data/road/preprocessed/fab_multi  --window_size 32 --strided 8 --rid 2
+```
+
+**(10) Train Unicon - ROAD**
+
+```
+ python3 main_unicon.py --batch_size 128 --learning_rate 0.05 --temp 0.1 --cosine --warm --n_classes 7 --dataset ROAD --trial road_fab --data_folder ./data/road/preprocessed/fab_multi/TFRecord_w32_s15/2 --epochs 100 --test_freq 90  > ./save/cmd_save/100_epoch_ROAD.log &
+```
+
 ## Reference
 
 ```

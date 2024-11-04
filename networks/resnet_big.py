@@ -191,7 +191,7 @@ class ConResNet(nn.Module):
 class CEResNet(nn.Module):
     """encoder + classifier"""
 
-    def __init__(self, name='resnet50', num_classes=10):
+    def __init__(self, name='resnet50', num_classes=5):
         super(CEResNet, self).__init__()
         model_fun, dim_in = model_dict[name]
         self.encoder = model_fun()
@@ -202,13 +202,25 @@ class CEResNet(nn.Module):
         # return self.fc(self.encoder(x))
 
 
+# class LinearClassifier(nn.Module):
+#     """Linear classifier"""
+
+#     def __init__(self, name='resnet50', num_classes=5):
+#         super(LinearClassifier, self).__init__()
+#         _, feat_dim = model_dict[name]
+#         self.fc = nn.Linear(feat_dim, num_classes)
+
+#     def forward(self, features):
+#         return self.fc(features)
 class LinearClassifier(nn.Module):
     """Linear classifier"""
 
-    def __init__(self, name='resnet50', num_classes=10):
+    def __init__(self, name='resnet50', num_classes=5):
         super(LinearClassifier, self).__init__()
         _, feat_dim = model_dict[name]
         self.fc = nn.Linear(feat_dim, num_classes)
 
-    def forward(self, features):
-        return self.fc(features)
+    def forward(self, features, return_embeddings=False):
+        if return_embeddings:
+            return features  # Return embeddings (features) before classification
+        return self.fc(features)  # Perform classification

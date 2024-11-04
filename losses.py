@@ -6,6 +6,7 @@ from __future__ import print_function
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class UniConLoss(nn.Module):
@@ -180,3 +181,26 @@ class SupConLoss(nn.Module):
         loss = loss.view(anchor_count, batch_size).mean()
 
         return loss
+    
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        # Cross entropy loss
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        # p_t: probability of the true class
+        p_t = torch.exp(-ce_loss)
+        # Focal loss formula
+        focal_loss = self.alpha * ((1 - p_t) ** self.gamma) * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
