@@ -21,6 +21,14 @@ class TwoCropTransform:
     def __call__(self, x):
         return [self.transform(x), self.transform(x)]
 
+class AddGaussianNoise(object):
+    def __init__(self, mean=0.0, std=0.1):
+        self.mean = mean
+        self.std = std
+        
+    def __call__(self, tensor):
+        noise = torch.randn(tensor.size()) * self.std + self.mean
+        return tensor + noise
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -102,17 +110,45 @@ def rand_bbox(size, lam):
     return bbx1, bby1, bbx2, bby2
 
 
+# def get_universum(images, labels, opt):
+#     """Calculating Mixup-induced universum from a batch of images"""
+#     tmp = images.cpu()
+#     label = labels.cpu()
+#     bsz = tmp.shape[0]
+#     bs = len(label)
+#     class_images = [[] for i in range(max(label) + 1)]
+#     for i in label.unique():
+#         class_images[i] = np.where(label != i)[0]
+#     units = [tmp[random.choice(class_images[labels[i % bs]])] for i in range(bsz)]
+#     universum = torch.stack(units, dim=0).cuda()
+#     lamda = opt.lamda
+#     if not hasattr(opt, 'mix') or opt.mix == 'mixup':
+#         # Using Mixup
+#         universum = lamda * universum + (1 - lamda) * images
+#     else:
+#         # Using CutMix
+#         lam = 0
+#         while lam < 0.45 or lam > 0.55:
+#             # Since it is hard to control the value of lambda in CutMix,
+#             # we accept lambda in [0.45, 0.55].
+#             bbx1, bby1, bbx2, bby2 = rand_bbox(images.size(), lamda)
+#             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (images.size()[-1] * images.size()[-2]))
+#         universum[:, :, bbx1:bbx2, bby1:bby2] = images[:, :, bbx1:bbx2, bby1:bby2]
+#     return universum
 def get_universum(images, labels, opt):
     """Calculating Mixup-induced universum from a batch of images"""
+    device = torch.device("mps")
+
     tmp = images.cpu()
     label = labels.cpu()
     bsz = tmp.shape[0]
     bs = len(label)
-    class_images = [[] for i in range(max(label) + 1)]
+    class_images = [[] for _ in range(max(label) + 1)]
     for i in label.unique():
         class_images[i] = np.where(label != i)[0]
     units = [tmp[random.choice(class_images[labels[i % bs]])] for i in range(bsz)]
-    universum = torch.stack(units, dim=0).cuda()
+    universum = torch.stack(units, dim=0).to(device)
+
     lamda = opt.lamda
     if not hasattr(opt, 'mix') or opt.mix == 'mixup':
         # Using Mixup

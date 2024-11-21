@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import os
 from torchvision import transforms
-from PIL import Image
 from tfrecord.torch.dataset import TFRecordDataset
 from torch.utils.data import Dataset
 

@@ -17,14 +17,12 @@ from torchvision import transforms
 from dataset import CANDataset
 from losses import SupConLoss, UniConLoss
 from networks.resnet_big import ConResNet, LinearClassifier
-from datetime import datetime
-from test import test, get_test_features, get_train_features, set_classifier
-from util import TwoCropTransform, AverageMeter
+from util import TwoCropTransform, AverageMeter, AddGaussianNoise
 from util import warmup_learning_rate
 from util import get_universum
 from util import save_model ,load_checkpoint, accuracy
 # from networks.classifier import LinearClassifier
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
+from sklearn.metrics import f1_score, precision_score, recall_score, confusion_matrix, accuracy_score
 from torch.utils.tensorboard import SummaryWriter
 def parse_option():
     parser = argparse.ArgumentParser('argument for training')
@@ -107,14 +105,13 @@ def parse_option():
                         help='id for recording multiple runs')
     opt = parser.parse_args()
 
+    opt.device = torch.device('mps')
     # set the path according to the environment
     if opt.data_folder is None:
         opt.data_folder = './data/Car-Hacking/TFRecord_w32_s32/2/'
     opt.model_path = './save/{}_models/{}'.format(opt.dataset, opt.method)
-
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
-    current_time = datetime.now().strftime("%D_%H%M%S").replace('/', '')
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
@@ -153,12 +150,17 @@ def set_loader(opt):
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
     normalize = transforms.Normalize(mean=mean, std=std)
+    train_transform = transforms.Compose([
+        transforms.RandomApply([AddGaussianNoise(0., 0.05)], p=0.5),
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.15)),
+        transforms.Normalize(mean=mean, std=std)
+    ])
 
     if opt.dataset in ['CAN', 'ROAD', 'CAN-ML']:
         transform = transforms.Compose([normalize])
 
         train_dataset = CANDataset(root_dir=opt.data_folder, window_size=32, is_train=True,
-                    transform=TwoCropTransform(transform))
+                    transform=TwoCropTransform(train_transform))
         test_dataset = CANDataset(root_dir=opt.data_folder, window_size=32, is_train=False, include_data=False, transform=transform)
     else:
         raise ValueError(opt.dataset)
@@ -174,27 +176,36 @@ def set_loader(opt):
 
 
 def set_model(opt):
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
     model = ConResNet(name=opt.model)
+    class_weights = torch.tensor([
+        1.0, 2.5649, 13.0418, 11.2991, 21.4869,
+        2.2657, 7.4472, 6.6365, 14.3246, 11.6507
+    ]).to(opt.device)
     if opt.method == 'UniCon':
-        criterion = UniConLoss(temperature=opt.temp)
+        criterion = UniConLoss(temperature=opt.temp, class_weights=class_weights)
     else:
         criterion = SupConLoss(temperature=opt.temp)
 
     classifier = LinearClassifier(num_classes=opt.n_classes)
-    criterion_classifier = torch.nn.CrossEntropyLoss()
-    if torch.cuda.is_available():
-        if torch.cuda.device_count() > 1:
-            # multiple GPU
-            # model.encoder = torch.nn.DataParallel(model.encoder)
+    criterion_classifier = torch.nn.CrossEntropyLoss(weight=class_weights)
+    # if torch.cuda.is_available():
+    #     if torch.cuda.device_count() > 1:
+    #         # multiple GPU
+    #         # model.encoder = torch.nn.DataParallel(model.encoder)
 
-            # assign GPU 
-            model.encoder = torch.nn.DataParallel(model.encoder, device_ids=[0, 1])
-        model = model.cuda()
-        criterion = criterion.cuda()
-        classifier = classifier.cuda()
-        criterion_classifier = criterion_classifier.cuda()
-        cudnn.benchmark = True
+    #         # assign GPU 
+    #         model.encoder = torch.nn.DataParallel(model.encoder, device_ids=[0, 1])
+    #     model = model.cuda()
+    #     criterion = criterion.cuda()
+    #     classifier = classifier.cuda()
+    #     criterion_classifier = criterion_classifier.cuda()
+    #     cudnn.benchmark = True
+    model = model.to(opt.device)
+    criterion = criterion.to(opt.device)
+    classifier = classifier.to(opt.device)
+    criterion_classifier = criterion_classifier.to(opt.device)
+    class_weights = class_weights.to(opt.device)
     print('Model device: ', next(model.parameters()).device)
     return model, criterion, classifier, criterion_classifier
 
@@ -245,9 +256,11 @@ def train(train_loader, model, criterion, optimizer, epoch, opt, step):
         image1, image2 = images[0], images[1]
         data_time.update(time.time() - end)
         images = torch.cat([image1, image2], dim=0)
-        if torch.cuda.is_available():
-            images = images.cuda(non_blocking=True)
-            labels = labels.cuda(non_blocking=True)
+        # if torch.cuda.is_available():
+        #     images = images.cuda(non_blocking=True)
+        #     labels = labels.cuda(non_blocking=True)
+        images = images.to(opt.device, non_blocking=True)
+        labels = labels.to(opt.device, non_blocking=True)
         bsz = labels.shape[0]
 
         if opt.method == 'UniCon':
@@ -312,10 +325,11 @@ def train_classifier(train_loader, model, classifier, criterion, optimizer, epoc
     for idx, (images, labels) in enumerate(train_loader):
         step += 1
         images = images[0]
-        if torch.cuda.is_available():
-            images = images.cuda(non_blocking=True)
-            labels = labels.cuda(non_blocking=True)
-        
+        # if torch.cuda.is_available():
+        #     images = images.cuda(non_blocking=True)
+        #     labels = labels.cuda(non_blocking=True)
+        images = images.to(opt.device, non_blocking=True)
+        labels = labels.to(opt.device, non_blocking=True)
         bsz = labels.size(0)  # Batch size
 
         # Extract features from the pre-trained model in evaluation mode
@@ -361,10 +375,11 @@ def validate(val_loader, model, classifier, criterion, opt):
     
     with torch.no_grad():
         for images, labels in tqdm(val_loader): 
-            if torch.cuda.is_available():
-                images = images.cuda(non_blocking=True)
-                labels = labels.cuda(non_blocking=True)
-            
+            # if torch.cuda.is_available():
+            #     images = images.cuda(non_blocking=True)
+            #     labels = labels.cuda(non_blocking=True)
+            images = images.to(opt.device, non_blocking=True)
+            labels = labels.to(opt.device, non_blocking=True)
             features = model.encoder(images)
             outputs = classifier(features)
 
@@ -383,12 +398,13 @@ def validate(val_loader, model, classifier, criterion, opt):
             total_pred = np.concatenate((total_pred, pred), axis=0)
             total_label = np.concatenate((total_label, labels), axis=0)
     
+    acc = accuracy_score(total_label, total_pred)
     f1 = f1_score(total_label, total_pred, average='weighted')
     precision = precision_score(total_label, total_pred, average='weighted', zero_division=0)
     recall = recall_score(total_label, total_pred, average='weighted')
     conf_matrix = confusion_matrix(total_label, total_pred)
     
-    return losses.avg, f1, precision, recall, conf_matrix
+    return losses.avg, acc, f1, precision, recall, conf_matrix
 
 def adjust_learning_rate(args, optimizer, epoch, class_str=''):
     dict_args = vars(args)
@@ -413,8 +429,8 @@ def main():
 
     seed = 1
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    # torch.cuda.manual_seed(seed)
+    # torch.cuda.manual_seed_all(seed)
 
     # build data loader
     train_loader, train_classifier_loader, test_loader = set_loader(opt)
@@ -439,7 +455,7 @@ def main():
         new_epoch = opt.epochs
         new_save_freq = opt.save_freq
         model, optimizer, start_epoch, opt = load_checkpoint(opt.resume, model, optimizer)
-
+        # classifier, optimizer_classifier, _, _ = load_checkpoint(opt.resume, classifier, optimizer_classifier)
         if new_epoch != opt.epochs:
             opt.epochs = new_epoch
         if new_save_freq != opt.save_freq:
@@ -469,33 +485,36 @@ def main():
             new_step, loss_ce, train_acc = train_classifier(train_classifier_loader, model, classifier, 
                                                             criterion_classifier, optimizer_classifier, epoch, opt, step, logger)
             pp = pprint.PrettyPrinter(indent=4)
-            print('Classifier: Loss: {:.4f}, Acc: {}'.format(loss_ce, train_acc))
+            print('Train Classifier: Loss: {:.4f}, Acc: {}'.format(loss_ce, train_acc))
             # Log results
             log_writer.write('Classifier: Loss: {:.4f}, Acc: {}\n'.format(loss_ce, train_acc))
-            loss, val_f1, precision, recall, conf_matrix = validate(test_loader, model, classifier, criterion_classifier, opt)
 
+            loss, val_acc, val_f1, precision, recall, conf_matrix = validate(test_loader, model, classifier, criterion_classifier, opt)
+            print('Val Classifier: Loss: {:.4f}, Acc: {}'.format(loss, val_acc))
+            
             # Tensorboard logging
+            logger.add_scalar('loss_ce/train', loss_ce, step)
             logger.add_scalar('loss_ce/val', loss, step)
-            logger.add_scalar('f1/val', loss, step)
-            logger.add_scalar('precision/val', loss, step)
-            logger.add_scalar('recall/val', loss, step)
+            logger.add_scalar('f1/val', val_f1, step)
+            logger.add_scalar('precision/val', precision, step)
+            logger.add_scalar('recall/val', recall, step)
 
-            if loss < best_val_loss:
-                best_val_loss = loss
-                epochs_no_improve = 0
-            else:
-                epochs_no_improve += 1
-                # If no improvement for 'patience' epochs, stop training
-                if epochs_no_improve >= patience:
-                    #Save before stop
-                    save_file = os.path.join(opt.save_folder, f'earlr_stop_{epoch}.pth')
-                    save_model(model, optimizer, opt, epoch, save_file)
+            # if loss < best_val_loss:
+            #     best_val_loss = loss
+            #     epochs_no_improve = 0
+            # else:
+            #     epochs_no_improve += 1
+            #     # If no improvement for 'patience' epochs, stop training
+            #     if epochs_no_improve >= patience:
+            #         #Save before stop
+            #         save_file = os.path.join(opt.save_folder, f'early_stop_{epoch}.pth')
+            #         save_model(model, optimizer, opt, epoch, save_file)
 
-                    ckpt = 'earlt__stop_class_epoch_{}.pth'.format(epoch)
-                    save_file = os.path.join(opt.save_folder, ckpt)
-                    save_model(classifier, optimizer_classifier, opt, epoch, save_file)
-                    print(f"Early stopping at epoch {epoch}.")
-                    break
+            #         ckpt = 'early__stop_class_epoch_{}.pth'.format(epoch)
+            #         save_file = os.path.join(opt.save_folder, ckpt)
+            #         save_model(classifier, optimizer_classifier, opt, epoch, save_file)
+            #         print(f"Early stopping at epoch {epoch}.")
+            #         break
 
             log_writer.write(f'F1 Score: {val_f1:.4f}\n')
             log_writer.write(f'Precision: {precision:.4f}\n')

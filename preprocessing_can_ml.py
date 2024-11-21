@@ -140,8 +140,8 @@ def main(indir, outdir, attacks, window_size, strided):
 
         foutput_attack = '{}/{}'.format(outdir, attack)
         foutput_normal = '{}/Normal_{}'.format(outdir, attack)
-        df_attack = df[df['label'] != 0].sample(frac=0.1, random_state=42)
-        df_normal = df[df['label'] == 0].sample(frac=0.1, random_state=42)
+        df_attack = df[df['label'] != 0].sample(frac=0.05, random_state=42)
+        df_normal = df[df['label'] == 0].sample(frac=0.05, random_state=42)
         write_tfrecord(df_attack, foutput_attack)
         write_tfrecord(df_normal, foutput_normal)
         
@@ -155,7 +155,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--indir', type=str, default="./data/can-ml/2017-subaru-forester/merged")
-    parser.add_argument('--outdir', type=str, default="./data/can-ml/preprocessed/TFRecord")
+    parser.add_argument('--outdir', type=str, default="./data/can-ml/preprocessed/all_features/TFRecord")
     parser.add_argument('--window_size', type=int, default=32)
     parser.add_argument('--strided', type=int, default=16)
     args = parser.parse_args()
