@@ -15,28 +15,14 @@ import os
 
 can_ml_attributes = ['timestamp', 'arbitration_id', 'data_field', 'attack']
 
-# def pad_or_truncate(sequence, target_length):
-#     """Pad the sequence with zeros or truncate to the target length."""
-#     if len(sequence) < target_length:
-#         sequence = sequence + [0] * (target_length - len(sequence))  # pad with zeros
-#     return sequence[:target_length]  # truncate if longer
-
-# def reshape_to_32x32(array):
-#     """Reshape or pad a flattened array into a 32x32 matrix."""
-#     padded = pad_or_truncate(array, 32 * 32)  # make sure the array has exactly 1024 elements
-#     return np.array(padded).reshape((32, 32))  # reshape into 32x32 matrix
-def pad_or_truncate(array, target_length):
-    """Pad or truncate an array to a specific length using interpolation for padding."""
-    if len(array) > target_length:
-        return array[:target_length]
-    elif len(array) < target_length:
-        # Tạo phần padding sử dụng nội suy
-        padding = np.linspace(array[-1], np.mean(array), target_length - len(array))
-        return np.concatenate((array, padding))
-    return array
+def pad_or_truncate(sequence, target_length):
+    """Pad the sequence with zeros or truncate to the target length."""
+    if len(sequence) < target_length:
+        sequence = sequence + [0] * (target_length - len(sequence))  # pad with zeros
+    return sequence[:target_length]  # truncate if longer
 
 def reshape_to_32x32(array):
-    """Reshape or pad a flattened array into a 32x32 matrix using linspace padding."""
+    """Reshape or pad a flattened array into a 32x32 matrix."""
     padded = pad_or_truncate(array, 32 * 32)  # make sure the array has exactly 1024 elements
     return np.array(padded).reshape((32, 32))  # reshape into 32x32 matrix
 
@@ -57,28 +43,6 @@ def normalize_time_zscore(time_series):
     std_val = time_series.std()
     normalized = (time_series - mean_val) / std_val
     return normalized
-
-
-def normalize_timestamp(timestamp):
-    """
-    Normalize timestamp using delta time and Min-Max scaling.
-
-    Args:
-        timestamp (numpy.ndarray): Array of timestamp values.
-
-    Returns:
-        numpy.ndarray: Normalized representation of timestamp values.
-    """
-    # Step 1: Tính delta time
-    delta_time = timestamp - timestamp[0]  # Tính khoảng thời gian so với giá trị đầu tiên
-    
-    # Step 2: Min-Max Scaling
-    min_val = np.min(delta_time)
-    max_val = np.max(delta_time)
-    scaled = (delta_time - min_val) / (max_val - min_val)  # Chuẩn hóa giá trị trong khoảng [0, 1]
-    
-    # Step 3: Trả về giá trị đã chuẩn hóa (float)
-    return scaled
 
 def serialize_example(x, y): 
     """converts x, y to tf.train.Example and serialize"""
@@ -124,7 +88,7 @@ def split_data(file_name, attack_id, window_size, strided_size):
     # binary 'canID' (CAN ID)
     df['canID'] = df['arbitration_id'].apply(lambda x: split_into_list(x, 'canID'))
     # normalize timestamp
-    df['timestamp'] = normalize_timestamp(df['timestamp'].values)
+    df['timestamp'] = normalize_time_zscore(df['timestamp'])
     df = df.fillna(0)
     print("CAN-ML pre-processing: Done")
 
@@ -190,14 +154,14 @@ def main(indir, outdir, attacks, window_size, strided):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--indir', type=str, default="./data/can-ml/2017-subaru-forester/merged")
-    parser.add_argument('--outdir', type=str, default="./data/can-ml/preprocessed/all_features_v2/TFRecord")
+    # /Users/hieutran/lab/unicon-ids/data/can-train-and-test/set_01/train_01_merged
+    parser.add_argument('--indir', type=str, default="./data/can-train-and-test/set_01/train_01_merged")
+    parser.add_argument('--outdir', type=str, default="./data/can-train-and-test/set_01/preprocessed/TFRecord")
     parser.add_argument('--window_size', type=int, default=32)
     parser.add_argument('--strided', type=int, default=16)
     args = parser.parse_args()
     
-    attack_types = ["combined", "DoS", "fuzzing", "gear", "interval", "rpm", 
-                "speed", "standstill", "systematic"]
+    attack_types = ["accessory", "attack", "DoS", "force", "rpm", "standstill"]
     if args.strided is None:
         args.strided = args.window_size
         

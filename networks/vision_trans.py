@@ -11,7 +11,6 @@ class PatchEmbedding(nn.Module):
         self.patch_size = patch_size
         super().__init__()
         self.projection = nn.Sequential(
-            # using a conv layer instead of a linear one -> performance gains
             nn.Conv2d(in_channels, emb_size, kernel_size=patch_size, stride=patch_size),
             Rearrange('b e (h) (w) -> b (h w) e'),
         )
@@ -122,19 +121,14 @@ class ProjectionHead(nn.Module):
         )
 
     def forward(self, x):
-        # Xác định đầu vào là từ mô hình ViT
-        # Nếu input là [batch_size, sequence_length, embedding_dim]
         if x.dim() == 3:
             bsz, seq_len, emb_dim = x.shape
-            # Reshape thành [batch_size * sequence_length, embedding_dim] để đưa qua MLP
             x = x.reshape(bsz * seq_len, emb_dim)
         
-        # Áp dụng các tầng MLP trong ProjectionHead
-        feat = self.mlp(x)  # Đầu ra sẽ có kích thước [batch_size * sequence_length, feat_dim]
-        feat = F.normalize(feat, dim=1)  # Chuẩn hóa các đặc trưng
+        feat = self.mlp(x)
+        feat = F.normalize(feat, dim=1)
         
-        # Reshape lại để phù hợp với yêu cầu của UniConLoss hoặc phần tính toán tiếp theo
-        return feat.view(bsz, seq_len, -1)  # Đưa về lại [batch_size, sequence_length, feat_dim]
+        return feat.view(bsz, seq_len, -1)
 
         
 class ConViT(nn.Module):
@@ -146,18 +140,16 @@ class ConViT(nn.Module):
                 emb_size: int = 128,
                 img_size: int = 32,
                 depth: int = 12,
-                head: str = 'mlp',
+                head: str = 'linear',
                 feat_dim: int = 128,
                 n_classes: int = 5,
                 **kwargs):
         super(ConViT, self).__init__()
         
-        # Sử dụng Patch Embedding và Transformer Encoder để làm ViT encoder
         self.patch_embedding = PatchEmbedding(in_channels, patch_size, emb_size, img_size)
         self.transformer_encoder = TransformerEncoder(depth, emb_size=emb_size, **kwargs)
         self.classifier_head = ClassificationHead(emb_size, n_classes)
         
-        # Sử dụng projection head tương tự như ConResNet
         if head == 'linear':
             self.projection_head = nn.Linear(emb_size, feat_dim)
         elif head == 'mlp':
@@ -169,22 +161,51 @@ class ConViT(nn.Module):
         else:
             raise NotImplementedError(
                 'head not supported: {}'.format(head))
-        
-        # Sử dụng classifier head cho CE Loss
 
     def forward(self, x, use_projection=False):
-        # Bước qua Patch Embedding và Transformer Encoder
-        x = self.patch_embedding(x)  # Đầu vào: [batch_size, 3, 32, 32]
-        x = self.transformer_encoder(x)  # Đầu ra: [batch_size, seq_len, emb_size]
-        
-        # Lấy trung bình các đặc trưng để thu gọn thành vector
-        cls_token = x[:, 0]  # Đưa về dạng [batch_size, emb_size]
+        x = self.patch_embedding(x)
+        x = self.transformer_encoder(x)
+        cls_token = x[:, 0]
 
-        # Áp dụng projection head nếu được yêu cầu
         if use_projection:
             return F.normalize(self.projection_head(cls_token), dim=1)
 
-        # Ngược lại, sử dụng classifier head cho CE Loss
+        return self.classifier_head(x)
+
+
+class CEViT(nn.Module):
+    """Pure Vision Transformer (ViT) with a classification head"""
+
+    def __init__(self,     
+                in_channels: int = 3,
+                patch_size: int = 4,
+                emb_size: int = 128,
+                img_size: int = 32,
+                depth: int = 12,
+                n_classes: int = 5,
+                **kwargs):
+        super(CEViT, self).__init__()
+        
+        # Patch embedding: chia ảnh thành các patch và tạo embedding
+        self.patch_embedding = PatchEmbedding(in_channels, patch_size, emb_size, img_size)
+        
+        # Transformer encoder
+        self.transformer_encoder = TransformerEncoder(depth, emb_size=emb_size, **kwargs)
+        
+        # Classification head
+        self.classifier_head = ClassificationHead(emb_size, n_classes)
+
+    def forward(self, x):
+        # Patch embedding
+        x = self.patch_embedding(x)
+        
+        # Transformer Encoder
+        x = self.transformer_encoder(x)
+        
+        # Sử dụng token CLS từ Transformer Encoder
+        cls_token = x[:, 0]  # Token CLS nằm ở đầu
+        
+        # Classification head
         return self.classifier_head(x)
 
 

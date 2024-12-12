@@ -15,14 +15,15 @@ import torchvision.transforms.functional as F
 import pprint
 from torchvision import transforms
 from dataset import CANDataset
-from losses import SupConLoss, UniConLoss
-from networks.resnet_big import ConResNet, LinearClassifier
-from util import TwoCropTransform, AverageMeter, AddGaussianNoise
+# from losses import SupConLoss, UniConLoss, FocalLoss
+from networks.vision_trans import CEViT
+from datetime import datetime
+from util import TwoCropTransform, AverageMeter
 from util import warmup_learning_rate
 from util import get_universum
 from util import save_model ,load_checkpoint, accuracy
 # from networks.classifier import LinearClassifier
-from sklearn.metrics import f1_score, precision_score, recall_score, confusion_matrix, accuracy_score
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
 from torch.utils.tensorboard import SummaryWriter
 def parse_option():
     parser = argparse.ArgumentParser('argument for training')
@@ -76,7 +77,7 @@ def parse_option():
     parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--optimizer', type=str, default='SGD')
     parser.add_argument('--dataset', type=str, default='CAN',
-                        choices=['CAN', 'ROAD', 'CAN-ML', 'CAN-TT'],
+                        choices=['CAN-ML', 'CAN', 'ROAD'], 
                         help='dataset')
     parser.add_argument('--mean', type=str, 
                         help='mean of dataset in path in form of str tuple')
@@ -89,7 +90,7 @@ def parse_option():
 
     # method
     parser.add_argument('--method', type=str, default='UniCon', 
-                        choices=['UniCon', 'SupCon', 'SimCLR'],
+                        choices=['UniCon', 'SupCon', 'SimCLR', 'UniconViT', 'Normal'],
                         help='choose method')
 
     # temperature
@@ -110,8 +111,10 @@ def parse_option():
     if opt.data_folder is None:
         opt.data_folder = './data/Car-Hacking/TFRecord_w32_s32/2/'
     opt.model_path = './save/{}_models/{}'.format(opt.dataset, opt.method)
+
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
+    current_time = datetime.now().strftime("%D_%H%M%S").replace('/', '')
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
@@ -147,57 +150,29 @@ def set_loader(opt):
     mean = (0.5, 0.5, 0.5)
     std = (0.5, 0.5, 0.5)
     normalize = transforms.Normalize(mean=mean, std=std)
-    # train_transform = transforms.Compose([
-    #     transforms.RandomApply([AddGaussianNoise(0., 0.05)], p=0.5),
-    #     transforms.RandomErasing(p=0.3, scale=(0.02, 0.15)),
-    #     transforms.Normalize(mean=mean, std=std)
-    # ])
     transform = transforms.Compose([normalize])
 
-    train_dataset = CANDataset(root_dir=opt.data_folder, window_size=32, is_train=True,
-                transform=TwoCropTransform(transform))
-    test_dataset = CANDataset(root_dir=opt.data_folder, window_size=32, is_train=False, include_data=False, transform=transform)
+    train_dataset = CANDataset(root_dir=opt.data_folder, window_size=32, is_train=True)
+    test_dataset = CANDataset(root_dir=opt.data_folder, window_size=32, is_train=False, include_data=False)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers, pin_memory=True)
-    train_classifier_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=128, 
-        shuffle=True, num_workers=opt.num_workers,
-        pin_memory=True, sampler=None)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=opt.batch_size, shuffle=False, pin_memory=True)
 
-    return train_loader, train_classifier_loader, test_loader
+    return train_loader, test_loader
 
 
 def set_model(opt):
-    # torch.cuda.empty_cache()
-    model = ConResNet(name=opt.model)
-    if opt.method == 'UniCon':
-        criterion = UniConLoss(temperature=opt.temp)
-    else:
-        criterion = SupConLoss(temperature=opt.temp)
+    torch.cuda.empty_cache()
+    model = CEViT(emb_size=256, n_classes=opt.n_classes)
+    # model = VisionTransformer(img_size=32, patch_size=4, num_classes=opt.n_classes, dim=128, depth=6, heads=4, mlp_dim=256, dropout=0.1, emb_dropout=0.1)
+    criterion = torch.nn.CrossEntropyLoss()
+    criterion_validate = torch.nn.CrossEntropyLoss()
 
-    classifier = LinearClassifier(num_classes=opt.n_classes)
-    criterion_classifier = torch.nn.CrossEntropyLoss()
-    # if torch.cuda.is_available():
-    #     if torch.cuda.device_count() > 1:
-    #         # multiple GPU
-    #         # model.encoder = torch.nn.DataParallel(model.encoder)
-
-    #         # assign GPU 
-    #         model.encoder = torch.nn.DataParallel(model.encoder, device_ids=[0, 1])
-    #     model = model.cuda()
-    #     criterion = criterion.cuda()
-    #     classifier = classifier.cuda()
-    #     criterion_classifier = criterion_classifier.cuda()
-    #     cudnn.benchmark = True
     model = model.to(opt.device)
     criterion = criterion.to(opt.device)
-    classifier = classifier.to(opt.device)
-    criterion_classifier = criterion_classifier.to(opt.device)
-    
+    criterion_validate = criterion_validate.to(opt.device)
     print('Model device: ', next(model.parameters()).device)
-    return model, criterion, classifier, criterion_classifier
-
+    return model, criterion, criterion_validate
 
 optimize_dict = {
     'SGD' : optim.SGD,
@@ -239,61 +214,32 @@ def train(train_loader, model, criterion, optimizer, epoch, opt, step):
     end = time.time()
 
     for idx, (images, labels) in enumerate(train_loader):
-        # images: a list of length 2，each element being a tensor of size [128, 3, 32, 32]
-        # labels: vector of length 128
         step += 1
         data_time.update(time.time() - end)
-
-        image1, image2 = images[0], images[1]
-        images = torch.cat([image1, image2], dim=0)
-        # if torch.cuda.is_available():
-        #     images = images.cuda(non_blocking=True)
-        #     labels = labels.cuda(non_blocking=True)
+        
         images = images.to(opt.device, non_blocking=True)
         labels = labels.to(opt.device, non_blocking=True)
         bsz = labels.shape[0]
 
-        if opt.method == 'UniCon':
-            # get universum
-            universum = get_universum(images, labels, opt)
-            uni_features = model(universum)
-
-        # warm-up learning rate
         warmup_learning_rate(opt, epoch, idx, len(train_loader), optimizer)
 
-        # compute loss
-        features = model(images)
-        f1, f2 = torch.split(features, [bsz, bsz], dim=0)
-        features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+        outputs = model(images)
+        loss = criterion(outputs, labels)
 
-        if opt.method == 'UniCon':
-            loss = criterion(features, uni_features, labels)
-        elif opt.method == 'SupCon':
-            loss = criterion(features, labels)
-        elif opt.method == 'SimCLR':
-            loss = criterion(features)
-        else:
-            raise ValueError('contrastive method not supported: {}'.
-                             format(opt.method))
-
-        # update metric
         losses.update(loss.item(), bsz)
 
-        # SGD
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-        # print info
         if (idx + 1) % opt.print_freq == 0:
             log_message = (
                 'Train: [{0}][{1}/{2}]\t'
                 'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                'loss {loss.val:.3f} ({loss.avg:.3f})\n'.format(
+                'DT {data_time.val:.5f} ({data_time.avg:.5f})\t'
+                'loss {loss.val:.5f} ({loss.avg:.5f})\n'.format(
                     epoch, idx + 1, len(train_loader), batch_time=batch_time,
                     data_time=data_time, loss=losses
                 )
@@ -303,61 +249,14 @@ def train(train_loader, model, criterion, optimizer, epoch, opt, step):
 
     return step, losses.avg
 
-def train_classifier(train_loader, model, classifier, criterion, optimizer, epoch, opt, step, logger):
-    model.eval()
-    classifier.train()
-
-    losses = AverageMeter()
-    accs = AverageMeter()
-
-    # Start the training loop
-    end = time.time()
-    for idx, (images, labels) in enumerate(train_loader):
-        step += 1
-        images = images[0]
-        # if torch.cuda.is_available():
-        #     images = images.cuda(non_blocking=True)
-        #     labels = labels.cuda(non_blocking=True)
-        images = images.to(opt.device, non_blocking=True)
-        labels = labels.to(opt.device, non_blocking=True)
-        bsz = labels.size(0)  # Batch size
-
-        # Extract features from the pre-trained model in evaluation mode
-        with torch.no_grad():
-            features = model.encoder(images)
-
-        # Forward pass through the classifier
-        output = classifier(features.detach())
-
-        # Compute loss
-        loss = criterion(output, labels)
-        losses.update(loss.item(), bsz)
-
-        # Compute accuracy
-        acc = accuracy(output, labels, topk=(1,))
-        accs.update(acc[0].item(), bsz)
-
-        # Backward pass and optimization step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # Log loss and accuracy to TensorBoard every opt.print_freq steps
-        if step % opt.print_freq == 0:
-            logger.add_scalar('loss/train', losses.avg, step)
-            logger.add_scalar('accuracy/train', accs.avg, step)
-
-    # Return the updated step count, average loss, and average accuracy
-    return step, losses.avg, accs.avg
 
 def get_predict(outputs):
     _, pred = outputs.topk(1, 1, True, True)
     pred = pred.t().cpu().numpy().squeeze(0)
     return pred
 
-def validate(val_loader, model, classifier, criterion, opt):
+def validate(val_loader, model, criterion, opt):
     model.eval()
-    classifier.eval()
     
     losses = AverageMeter()
     total_pred = np.array([], dtype=int)
@@ -370,9 +269,7 @@ def validate(val_loader, model, classifier, criterion, opt):
             #     labels = labels.cuda(non_blocking=True)
             images = images.to(opt.device, non_blocking=True)
             labels = labels.to(opt.device, non_blocking=True)
-            features = model.encoder(images)
-            outputs = classifier(features)
-
+            outputs = model(images)
             bsz = labels.size(0)
             loss = criterion(outputs, labels)
             losses.update(loss.item(), bsz)
@@ -388,14 +285,14 @@ def validate(val_loader, model, classifier, criterion, opt):
             total_pred = np.concatenate((total_pred, pred), axis=0)
             total_label = np.concatenate((total_label, labels), axis=0)
     
-    acc = accuracy_score(total_label, total_pred)
-    acc = acc * 100
     f1 = f1_score(total_label, total_pred, average='weighted')
     precision = precision_score(total_label, total_pred, average='weighted', zero_division=0)
     recall = recall_score(total_label, total_pred, average='weighted')
     conf_matrix = confusion_matrix(total_label, total_pred)
-    
-    return losses.avg, acc, f1, precision, recall, conf_matrix
+    accuracy = accuracy_score(total_label, total_pred)
+    acc_percent = accuracy * 100 
+    return losses.avg, f1, precision, recall, conf_matrix, acc_percent
+
 
 def adjust_learning_rate(args, optimizer, epoch, class_str=''):
     dict_args = vars(args)
@@ -420,16 +317,13 @@ def main():
 
     seed = 1
     torch.manual_seed(seed)
-    # torch.cuda.manual_seed(seed)
-    # torch.cuda.manual_seed_all(seed)
 
     # build data loader
-    train_loader, train_classifier_loader, test_loader = set_loader(opt)
-    model, criterion, classifier, criterion_classifier = set_model(opt)
+    train_loader, test_loader = set_loader(opt)
+    model, criterion, criterion_validate = set_model(opt)
 
     # build optimizer
     optimizer = set_optimizer(opt, model, optim_choice=opt.optimizer)
-    optimizer_classifier = set_optimizer(opt, classifier, class_str='_classifier', optim_choice=opt.optimizer)
     
     logger = SummaryWriter(log_dir=opt.tb_folder, flush_secs=2)
 
@@ -442,6 +336,7 @@ def main():
         new_save_freq = opt.save_freq
         checkpoint_path = opt.model_path + '/' + opt.model_name + '/' + opt.resume
         model, optimizer, start_epoch, opt = load_checkpoint(checkpoint_path, model, optimizer)
+
         if new_epoch != opt.epochs:
             opt.epochs = new_epoch
         if new_save_freq != opt.save_freq:
@@ -450,70 +345,45 @@ def main():
 
     log_writer = open(opt.log_file, 'w')
     # training routine
+    pp = pprint.PrettyPrinter(indent=4)
+
     for epoch in range(start_epoch, opt.epochs + 1):
         print('Begin time: ' + str(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())))
         adjust_learning_rate(opt, optimizer, epoch)
-        # train for one epoch
-        # time1 = time.time()
+
         new_step, train_loss = train(train_loader, model, criterion, optimizer, epoch, opt, step)
-        # time2 = time.time()
 
-        print(f'Epoch {epoch}, Unicon Loss {train_loss:.4f}')
-        log_writer.write(f'Epoch: {epoch}, Unicon Loss: {train_loss:.4f}\n')
+        print(f'Epoch {epoch}, ViT Loss {train_loss:.4f}')
+        log_writer.write(f'Epoch: {epoch}, ViT Loss: {train_loss:.4f}\n')
+        logger.add_scalar('train_loss/val', train_loss, step)
+        
+        loss, val_f1, precision, recall, conf_matrix, accuracy = validate(test_loader, model, criterion_validate, opt)
+        logger.add_scalar('loss_ce/val', loss, step)
+        logger.add_scalar('acc/val', accuracy, step)
+        logger.add_scalar('val_f1/val', val_f1, step)
 
-        class_epoch = epoch - opt.epoch_start_classifier + 1
-        # Train and validate classifier 
-        # if class_epoch > 0:
-        if epoch % opt.save_freq == 0:
-            print("Classifier...")
-            # adjust_learning_rate(opt, optimizer_classifier, class_epoch, '_classifier')
-            adjust_learning_rate(opt, optimizer_classifier, epoch, '_classifier')
-            new_step, loss_ce, train_acc = train_classifier(train_classifier_loader, model, classifier, 
-                                                            criterion_classifier, optimizer_classifier, epoch, opt, step, logger)
-            pp = pprint.PrettyPrinter(indent=4)
-            # print('Train Classifier: Loss: {:.4f}, Acc: {}'.format(loss_ce, train_acc))
-            # Log results
-            log_writer.write('Classifier: Loss: {:.4f}, Acc: {}\n'.format(loss_ce, train_acc))
-
-            loss, val_acc, val_f1, precision, recall, conf_matrix = validate(test_loader, model, classifier, criterion_classifier, opt)
-            print('Train Classifier Loss: {:.4f}/, Validation: Loss: {:.4f}, Acc: {}'.format(loss_ce, loss, val_acc))
+        log_writer.write(f'Accuracy: {accuracy:.4f}\n')
+        log_writer.write(f'F1 Score: {val_f1:.4f}\n')
+        log_writer.write(f'Precision: {precision:.4f}\n')
+        log_writer.write(f'Recall: {recall:.4f}\n')
+        log_writer.write(f'Confusion Matrix:\n{pp.pformat(conf_matrix)}\n')
             
-            # Tensorboard logging
-            logger.add_scalar('loss_ce/train', loss_ce, step)
-            logger.add_scalar('loss_ce/val', loss, step)
-            logger.add_scalar('f1/val', val_f1, step)
-            logger.add_scalar('precision/val', precision, step)
-            logger.add_scalar('recall/val', recall, step)
-
-            log_writer.write(f'F1 Score: {val_f1:.4f}\n')
-            log_writer.write(f'Precision: {precision:.4f}\n')
-            log_writer.write(f'Recall: {recall:.4f}\n')
-            log_writer.write(f'Confusion Matrix:\n{pp.pformat(conf_matrix)}\n')
-            
-            # Print results
-            print(f'F1 Score: {val_f1:.4f}')
-            print(f'Precision: {precision:.4f}')
-            print(f'Recall: {recall:.4f}')
-            print('Confusion Matrix:')
-            print(conf_matrix)
+        # Print results
+        print(f'Accuracy: {accuracy:.4f}')
+        print(f'F1 Score: {val_f1:.4f}')
+        print(f'Precision: {precision:.4f}')
+        print(f'Recall: {recall:.4f}')
+        print('Confusion Matrix:')
+        print(conf_matrix)
 
         step = new_step
         # Save checkpoint 
         if epoch % opt.save_freq == 0:
             save_file = os.path.join(opt.save_folder, f'ckpt_epoch_{epoch}.pth')
             save_model(model, optimizer, opt, epoch, save_file)
-
-            ckpt = 'ckpt_class_epoch_{}.pth'.format(epoch)
-            save_file = os.path.join(opt.save_folder, ckpt)
-            save_model(classifier, optimizer_classifier, opt, epoch, save_file)
     
-    save_file = os.path.join(
-        opt.save_folder, 'last.pth')
+    save_file = os.path.join(opt.save_folder, 'last.pth')
     save_model(model, optimizer, opt, opt.epochs, save_file)
-
-    save_file = os.path.join(
-        opt.save_folder, 'last_classifier.pth')
-    save_model(classifier, optimizer_classifier, opt, opt.epochs, save_file)
     
 if __name__ == '__main__':
     main()

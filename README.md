@@ -103,12 +103,22 @@ CUDA_VISIBLE_DEVICES=0 python3 preprocessing_road.py --window_size=32 --strided=
 python3 preprocessing_can_ml.py --window_size=32 --strided=16 > data_preprocessing_can_ml.txt
 ```
 
-**(9) Train/Val Split**
+**(8) Preprocessing CAN_TRAIN_TEST dataset**
 
 ```
+python3 preprocessing_can_tt.py --window_size=32 --strided=16 > data_preprocessing_can_tt.txt
+```
+
+**(9) Train/Val Split**
+
+````
 python3 train_test_split_all.py --data_path ./data/road/preprocessed/fab_multi  --window_size 32 --strided 8 --rid 2
 python3 train_test_split_all.py --data_path ./data/can-ml/preprocessed/all_features --window_size 32 --strided 16 --rid 2
-```
+``` new preprocessing can-ml
+python3 train_test_split_all.py --data_path ./data/can-ml/preprocessed/all_features_v2 --window_size 32 --strided 16 --rid 2
+python3 train_test_split_all.py --data_path ./data/can-train-and-test/set_01/preprocessed --window_size 32 --strided 16 --rid 2
+
+````
 
 **(10) Train Unicon - ROAD**
 
