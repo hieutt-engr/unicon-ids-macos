@@ -21,124 +21,79 @@ Learning [paper](https://arxiv.org/abs/2003.05438)
 
 ## Comparison
 
-Results on CIFAR-100:
-|Method|Architecture|Batch size|Accuracy(%)|
-|---|---|---|---|
-|Cross Entropy|ResNet-50|1024|74.6|
-|SimCLR|ResNet-50|1024|68.4|
-|SupCon(baseline)|ResNet-50|1024|76.5|
-|UniCon(ours)|ResNet-18|256|79.2|
-|UniCon(ours)|ResNet-50|256|81.7|
+Results on CAN-ML:
+|Method|Architecture|Batch size|Accuracy(%)|F1|PREC|REC|
+|---|---|---|---|---|---|---|
+|Vision Transformer|NLP|128|97.5|0.97|0.97|0.97|0.97|
+|Cross Entropy|ResNet-50|128|97.6|0.97|0.97|0.97|0.97|
+|REC CNN|CNN|128|99.2|0.98|0.98|0.98|0.98|
+|CNN LSTM|CNN|128|99.3|0.98|0.98|0.98|0.98|
+|UniCon|ResNet-50|128|99.0|0.99|0.99|0.99|
 
 ## Running
 
-We refer you to the [official pytorch implementation of SupCon](https://github.com/HobbitLong/SupContrast) for
-the implementations of SupCon and SimCLR. If you want to run SupCon and SimCLR with our code, you can simply change
-`python main_supcon.py` to `python main_unicon.py` and maintain other parts. We will give instructions on SupCon,
-SupMix and CE classifier. Our samples are running on CIFAR-100 and you can run on CIFAR-10, TinyImageNet and ImageNet
-(you need to download the datasets yourself for the latter two) with `--dataset cifar10/tinyimagenet/imagenet`.
-
-**(1) UniCon**
-
-```
-python main_unicon.py --batch_size 256
-  --learning_rate 0.05 --temp 0.1
-  --cosine --warm
-```
-
-You can change Mixup parameter with `--lamda 0.5`. Or you can use CutMix with `--mix cutmix`.
-
-**(2) SupMix**
-
-```
-python main_supmix.py --batch_size 256
-  --learning_rate 0.05 --temp 0.1
-  --cosine --warm --beta --lamda 0.5
-```
-
-Here `--lamda` is used in distribution Beta(lambda, lambda). You can also set lambda to a constant by reducing
-`--beta`.
-
-**(3) Cross Entropy**
-
-```
-python main_ce.py --batch_size 1024
-  --learning_rate 0.8
-  --cosine
-```
-
-You can use `--augment`, `--mixup --alpha 0.5`, `--cutmix --alpha 0.5 --cutmix_prob 0.5` to enable augmentations,
-Mixup and CutMix, respectively. Please note that Mixup and CutMix cannot be applied together. If so, only Mixup is
-used.
-
-**(4) Linear Evaluation**
-
-```
-python main_linear.py --batch_size 512
-  --learning_rate 5
-  --ckpt /path/to/model.pth
-```
-
-**(5) Preprocessing CAN dataset**
+**(1) Preprocessing CAN dataset**
 
 ```
 python3 preprocessing.py --window_size=32 --strided=32 --indir=./data/Car-Hacking --outdir=./data/Car-Hacking> data_preprocessing_can.txt
 ```
 
-**(6) Preprocessing ROAD Fabrication dataset**
+**(2) Preprocessing ROAD Fabrication dataset**
 
 ```
-CUDA_VISIBLE_DEVICES=2 python3 preprocessing_road.py --window_size=32 --strided=8 --attack_type=road_fab --indir=./data/road/fab_dataset --outdir=./data/road/preprocessed/fab_multi/TFRecord > data_preprocessing_roadfab_new.txt
+python3 preprocessing_road.py --window_size=32 --strided=8 --attack_type=road_fab --indir=./data/road/fab_dataset --outdir=./data/road/preprocessed/fab_multi/TFRecord > data_preprocessing_roadfab_new.txt
 ```
 
-**(7) Preprocessing ROAD Masquerade dataset**
+**(3) Preprocessing ROAD Masquerade dataset**
 
 ```
-CUDA_VISIBLE_DEVICES=0 python3 preprocessing_road.py --window_size=32 --strided=8 --attack_type=road_mas --indir=./data/road/mas_dataset --outdir=./data/road/preprocessed/mas_multi/TFRecord > data_preprocessing_roadfab.txt
+python3 preprocessing_road.py --window_size=32 --strided=8 --attack_type=road_mas --indir=./data/road/mas_dataset --outdir=./data/road/preprocessed/mas_multi/TFRecord > data_preprocessing_roadfab.txt
 ```
 
-**(8) Preprocessing CAN_ML dataset**
+**(4) Preprocessing CAN_ML dataset**
 
 ```
 python3 preprocessing_can_ml.py --window_size=32 --strided=16 > data_preprocessing_can_ml.txt
 ```
 
-**(8) Preprocessing CAN_TRAIN_TEST dataset**
-
-```
-python3 preprocessing_can_tt.py --window_size=32 --strided=16 > data_preprocessing_can_tt.txt
-```
-
-**(9) Train/Val Split**
+**(5) Train/Val Split**
 
 ````
 python3 train_test_split_all.py --data_path ./data/road/preprocessed/fab_multi  --window_size 32 --strided 8 --rid 2
 python3 train_test_split_all.py --data_path ./data/can-ml/preprocessed/all_features --window_size 32 --strided 16 --rid 2
 ``` new preprocessing can-ml
 python3 train_test_split_all.py --data_path ./data/can-ml/preprocessed/all_features_v2 --window_size 32 --strided 16 --rid 2
-python3 train_test_split_all.py --data_path ./data/can-train-and-test/set_01/preprocessed --window_size 32 --strided 16 --rid 2
 
 ````
 
-**(10) Train Unicon - ROAD**
+**(6) UniCon**
 
 ```
- python3 main_unicon.py --batch_size 128 --learning_rate 0.05 --temp 0.1 --cosine --warm --n_classes 7 --dataset ROAD --trial road_fab --data_folder ./data/road/preprocessed/fab_multi/TFRecord_w32_s15/2 --epochs 100 --test_freq 90  > ./save/cmd_save/100_epoch_ROAD.log &
+python main_unicon.py --batch_size 128
+  --learning_rate 0.05 --temp 0.07
+  --cosine --warm
 ```
 
-**(11) Tensorboard**
+You can change Mixup parameter with `--lamda 0.5`. Or you can use CutMix with `--mix cutmix`.
+
+**(7) Cross Entropy**
+
+```
+python main_ce.py --batch_size 128
+  --learning_rate 0.05
+  --cosine --warm
+```
+
+**(8) Train Unicon - ROAD**
+
+```
+python3 main_unicon.py --batch_size 128 --learning_rate 0.05 --temp 0.1 --cosine --warm --n_classes 7 --dataset ROAD --trial road_fab --data_folder ./data/road/preprocessed/fab_multi/TFRecord_w32_s15/2 --epochs 100 --test_freq 90  > ./save/cmd_save/100_epoch_ROAD.log &
+```
+
+**(9) Tensorboard**
 
 ```
 tensorboard --logdir ./save/CAN-ML_models/UniCon/UniCon_CAN-ML_resnet50_lr_0.05_decay_0.0001_bsz_128_temp_0.07_mixup_lambda_0.5_trial_can_ml_cosine_warm/runs
 ```
 
 ## Reference
-
-```
-@article{han2022universum,
-  title={Universum-inspired Supervised Contrastive Learning},
-  author={Han, Aiyang and Chen, Songcan},
-  journal={arXiv preprint arXiv:2204.10695},
-  year={2022}
-}
-```
